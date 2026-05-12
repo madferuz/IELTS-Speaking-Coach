@@ -1,0 +1,6 @@
+# Audio recording — pick whichever library your code uses
+sounddevice>=0.4.6
+scipy>=1.11.0
+
+# If you use pyaudio instead, comment out the two lines above and use:
+# pyaudio>=0.2.13
