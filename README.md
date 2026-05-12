@@ -5,7 +5,7 @@ practice for the test on their own — without needing a partner or a paid
 subscription.
 
 <p align="center">
-  <img src="assets/logo.png" alt="IELTS Speaking Coach" width="600"/>
+  <img src="logo.png" alt="IELTS Speaking Coach" width="600"/>
 </p>
 
 ## Why I built this
