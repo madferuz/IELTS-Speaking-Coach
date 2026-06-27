@@ -344,6 +344,7 @@ class Part3Screen(Screen):
     def _tick(self, _dt):
         self.seconds_left -= 1
         self.timer_label.text = format_time(max(self.seconds_left, 0))
+        self.timer_label.color = CORAL if self.seconds_left <= 10 else TEXT
         if self.seconds_left <= 0:
             self._stop_recording()
             return False
