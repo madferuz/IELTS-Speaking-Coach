@@ -1,4 +1,4 @@
-"""Home screen — landing page with hero, stats, and part cards."""
+"""Home screen — landing page with hero, stats, and part pills."""
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
@@ -42,41 +42,71 @@ class RoundedCard(BoxLayout):
         self._rect.size = self.size
 
 
-class PartCard(ButtonBehavior, BoxLayout):
+class PartPill(ButtonBehavior, BoxLayout):
+    """A compact, color-accented pill for selecting a part."""
+
     def __init__(self, part_id, on_select, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
-        self.padding = [dp(16), dp(14)]
-        self.spacing = dp(4)
-        self.size_hint_y = None
-        self.height = dp(130)
+        self.padding = [dp(8), dp(14)]
+        self.spacing = dp(2)
         self.part_id = part_id
         self.on_select_callback = on_select
-        # How far the card shrinks inward on press (in dp)
-        self._press_inset = dp(6)
-
-        with self.canvas.before:
-            Color(*SURFACE)
-            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12)])
-        self.bind(pos=self._sync, size=self._sync)
+        self._press_inset = dp(4)
 
         part = PARTS[part_id]
-        self.add_widget(make_label(part["label"], FONT_LABEL, part["color"], bold=True, height=20))
-        self.add_widget(make_label(part["name"], FONT_H2, TEXT, bold=True, height=30))
-        self.add_widget(make_label(part["desc"], FONT_BODY, MUTED, height=26))
-        self.add_widget(make_label(
-            "{} questions".format(total_questions(part_id)),
-            FONT_LABEL, part["color"], bold=True, height=20,
+        radius = dp(20)  # large radius = pill shape
+
+        with self.canvas.before:
+            # Card surface
+            Color(*SURFACE)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
+            # Color accent bar across the top of the pill
+            self._accent_color = Color(*part["color"])
+            self._accent = RoundedRectangle(
+                pos=self.pos, size=(self.width, dp(4)),
+                radius=[dp(2)],
+            )
+        self.bind(pos=self._sync, size=self._sync)
+
+        # "PART 1" label in the part color
+        self.add_widget(Label(
+            text=part["label"],
+            font_size=FONT_LABEL,
+            color=part["color"],
+            bold=True,
+            halign="center", valign="middle",
+            size_hint_y=None, height=dp(18),
+        ))
+        # Short name (e.g. "Introduction")
+        name_lbl = Label(
+            text=part["name"],
+            font_size="13sp",
+            color=TEXT,
+            bold=True,
+            halign="center", valign="middle",
+            size_hint_y=None, height=dp(20),
+        )
+        name_lbl.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
+        self.add_widget(name_lbl)
+        # Question count
+        self.add_widget(Label(
+            text="{} Qs".format(total_questions(part_id)),
+            font_size=FONT_LABEL,
+            color=MUTED,
+            halign="center", valign="middle",
+            size_hint_y=None, height=dp(16),
         ))
 
     def _sync(self, *_):
-        # Only re-sync from layout when not mid-press-animation
         if not getattr(self, "_animating", False):
             self._rect.pos = self.pos
             self._rect.size = self.size
+        # Accent bar always sits at the top edge, full width
+        self._accent.pos = (self.x, self.top - dp(4))
+        self._accent.size = (self.width, dp(4))
 
     def on_press(self):
-        # Play tap sound + springy shrink-inward on touch down
         play_tap()
         self._animating = True
         inset = self._press_inset
@@ -88,7 +118,6 @@ class PartCard(ButtonBehavior, BoxLayout):
         anim.start(self._rect)
 
     def on_release(self):
-        # Spring back out with overshoot, then fire the callback
         Animation.cancel_all(self._rect)
         anim = Animation(pos=self.pos, size=self.size,
                          duration=0.32, transition="out_back")
@@ -105,7 +134,7 @@ class HomeScreen(Screen):
     def __init__(self, on_part_selected, **kwargs):
         super().__init__(**kwargs)
         self.on_part_selected = on_part_selected
-        self._cards = []
+        self._pills = []
         self._build_ui()
 
     def _build_ui(self):
@@ -133,10 +162,14 @@ class HomeScreen(Screen):
 
         root.add_widget(make_label("SELECT A PART", FONT_LABEL, MUTED, bold=True, height=20))
 
+        # Three compact pills in a row
+        pill_row = BoxLayout(orientation="horizontal", spacing=dp(10),
+                             size_hint_y=None, height=dp(78))
         for part_id in (1, 2, 3):
-            card = PartCard(part_id=part_id, on_select=self.on_part_selected)
-            self._cards.append(card)
-            root.add_widget(card)
+            pill = PartPill(part_id=part_id, on_select=self.on_part_selected)
+            self._pills.append(pill)
+            pill_row.add_widget(pill)
+        root.add_widget(pill_row)
 
         root.add_widget(make_label("HOW IT WORKS", FONT_LABEL, MUTED, bold=True, height=20))
 
@@ -154,12 +187,12 @@ class HomeScreen(Screen):
         self.add_widget(scroll)
 
     def on_pre_enter(self, *args):
-        # Reset cards to hidden before the entrance animation
-        for card in self._cards:
-            card.opacity = 0
+        # Reset pills to hidden before the entrance animation
+        for pill in self._pills:
+            pill.opacity = 0
 
     def on_enter(self, *args):
-        # Stagger each card fading in, one after another
-        for i, card in enumerate(self._cards):
+        # Stagger each pill fading in, one after another
+        for i, pill in enumerate(self._pills):
             anim = Animation(opacity=1, duration=0.4, transition="out_quad")
-            Clock.schedule_once(lambda dt, c=card, a=anim: a.start(c), i * 0.1)
+            Clock.schedule_once(lambda dt, p=pill, a=anim: a.start(p), i * 0.1)
