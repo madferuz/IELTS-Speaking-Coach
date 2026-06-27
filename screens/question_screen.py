@@ -87,6 +87,11 @@ class Part1Screen(Screen):
         self.used_indices = used_indices if used_indices is not None else set()
         self.current_idx = None
         self.current_question = None
+        # Full-test mode hooks (set by main.py)
+        self.test_mode = False
+        self.on_test_complete = None
+        self._test_q_count = 0
+        self._test_q_target = 4
 
         self.is_recording = False
         self.audio_frames = []
@@ -374,17 +379,32 @@ class Part1Screen(Screen):
             filename = RECORDINGS_DIR / ("part1_" + timestamp + ".wav")
             sf.write(str(filename), audio, SAMPLE_RATE)
             self.status_label.text = "Answer recorded"
-            self.next_btn.disabled = False
-            self.next_btn.opacity = 1.0
-
             if self.current_idx is not None:
                 self.used_indices.add(self.current_idx)
+
+            if getattr(self, "test_mode", False):
+                # Full test: auto-advance through several Part 1 questions
+                self._test_q_count += 1
+                self.next_btn.disabled = True
+                self.next_btn.opacity = 0.5
+                if self._test_q_count >= self._test_q_target:
+                    Clock.schedule_once(lambda dt: self._finish_part1_test(), 1.5)
+                else:
+                    Clock.schedule_once(lambda dt: self._load_question(), 1.5)
+            else:
+                self.next_btn.disabled = False
+                self.next_btn.opacity = 1.0
         else:
             self.status_label.text = "No audio captured"
 
     def _next_question(self, *_):
         play_tap()
         self._load_question()
+
+    def _finish_part1_test(self):
+        self._test_q_count = 0
+        if self.on_test_complete:
+            self.on_test_complete()
 
     def _go_home(self, *_):
         play_tap()

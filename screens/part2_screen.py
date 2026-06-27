@@ -65,6 +65,9 @@ class Part2Screen(Screen):
         self.used_indices = used_indices if used_indices is not None else set()
         self.current_idx = None
         self.current_question = None
+        # Full-test mode hooks (set by main.py)
+        self.test_mode = False
+        self.on_test_complete = None
 
         self.phase = PHASE_IDLE
         self.audio_frames = []
@@ -376,9 +379,15 @@ class Part2Screen(Screen):
             self.record_btn.disabled = True
             self.record_btn.opacity = 0.4
             self.record_btn.text = "DONE"
-            self.next_btn.disabled = False
-            self.next_btn.opacity = 1
             self.notes_input.readonly = True
+            if getattr(self, "test_mode", False):
+                self.next_btn.disabled = True
+                self.next_btn.opacity = 0
+                if self.on_test_complete:
+                    Clock.schedule_once(lambda dt: self.on_test_complete(), 1.5)
+            else:
+                self.next_btn.disabled = False
+                self.next_btn.opacity = 1
 
     # ------------------------------------------------------------
     # Notes expand / collapse

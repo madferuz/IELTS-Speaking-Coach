@@ -53,6 +53,9 @@ class Part3Screen(Screen):
         self.used_indices = used_indices if used_indices is not None else set()
         self.current_idx = None
         self.current_question = None
+        # Full-test mode hooks (set by main.py)
+        self.test_mode = False
+        self.on_test_complete = None
 
         # 0 = main, 1 = follow-up 1, 2 = follow-up 2, 3 = done
         self.question_step = 0
@@ -393,10 +396,14 @@ class Part3Screen(Screen):
             self.question_step += 1
             self._show_current_step()
         else:
-            # Finished all 3 - mark used and load a new discussion
+            # Finished all 3 follow-ups
             if self.current_idx is not None:
                 self.used_indices.add(self.current_idx)
-            self._load_question()
+            if getattr(self, "test_mode", False):
+                if self.on_test_complete:
+                    self.on_test_complete()
+            else:
+                self._load_question()
 
     def _go_home(self, *_):
         play_tap()

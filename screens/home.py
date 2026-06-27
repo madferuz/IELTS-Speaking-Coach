@@ -1,22 +1,32 @@
-"""Home screen — landing page with hero, stats, and part pills."""
+"""Home screen — landing page with hero, stats, full-test card, and practice pills."""
+
+import os
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.image import Image
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.scrollview import ScrollView
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, RoundedRectangle, PushMatrix, PopMatrix, Rotate
 from kivy.metrics import dp
 from kivy.animation import Animation
 from kivy.clock import Clock
 
 from theme import (
-    SURFACE, SURFACE2, LIME, TEXT, MUTED, DIM,
+    SURFACE, SURFACE2, LIME, TEXT, MUTED, DIM, BG,
     FONT_H2, FONT_BODY, FONT_LABEL,
     PARTS,
 )
 from questions import total_questions
 from sound import play_tap
+
+
+# Path to the graduation cap image (assets/ next to the project root)
+CAP_IMAGE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "graduationhat.png",
+)
 
 
 def make_label(text, font_size, color, bold=False, height=24):
@@ -27,6 +37,32 @@ def make_label(text, font_size, color, bold=False, height=24):
     )
     lbl.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
     return lbl
+
+
+class RockingImage(Image):
+    """An image that rocks/tilts back and forth continuously."""
+
+    def __init__(self, source, max_angle=14, **kwargs):
+        super().__init__(source=source, allow_stretch=True, keep_ratio=True, **kwargs)
+        self._max_angle = max_angle
+        with self.canvas.before:
+            PushMatrix()
+            self._rot = Rotate(angle=0, origin=self.center)
+        with self.canvas.after:
+            PopMatrix()
+        self.bind(pos=self._update_origin, size=self._update_origin)
+
+    def _update_origin(self, *_):
+        self._rot.origin = self.center
+
+    def start_rocking(self):
+        self._rot.angle = -self._max_angle
+        self._rock_to(self._max_angle)
+
+    def _rock_to(self, target):
+        anim = Animation(angle=target, duration=1.1, transition="in_out_sine")
+        anim.bind(on_complete=lambda *a: self._rock_to(-target))
+        anim.start(self._rot)
 
 
 class RoundedCard(BoxLayout):
@@ -42,8 +78,59 @@ class RoundedCard(BoxLayout):
         self._rect.size = self.size
 
 
+class FullTestCard(ButtonBehavior, BoxLayout):
+    """Big primary card that starts a full mock exam (all 3 parts)."""
+
+    def __init__(self, on_start, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.padding = [dp(20), dp(18)]
+        self.spacing = dp(4)
+        self.size_hint_y = None
+        self.height = dp(110)
+        self.on_start = on_start
+        self._press_inset = dp(6)
+
+        with self.canvas.before:
+            Color(*LIME)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(16)])
+        self.bind(pos=self._sync, size=self._sync)
+
+        self.add_widget(make_label("FULL MOCK TEST", FONT_LABEL, BG, bold=True, height=20))
+        self.add_widget(make_label("Take the complete exam", "19sp", BG, bold=True, height=30))
+        self.add_widget(make_label("All 3 parts - one continuous test - ~14 min",
+                                   FONT_BODY, BG, height=24))
+
+    def _sync(self, *_):
+        if not getattr(self, "_animating", False):
+            self._rect.pos = self.pos
+            self._rect.size = self.size
+
+    def on_press(self):
+        play_tap()
+        self._animating = True
+        inset = self._press_inset
+        target_pos = (self.x + inset, self.y + inset)
+        target_size = (self.width - 2 * inset, self.height - 2 * inset)
+        Animation.cancel_all(self._rect)
+        Animation(pos=target_pos, size=target_size,
+                  duration=0.09, transition="out_quad").start(self._rect)
+
+    def on_release(self):
+        Animation.cancel_all(self._rect)
+        anim = Animation(pos=self.pos, size=self.size,
+                         duration=0.32, transition="out_back")
+
+        def _done(*_):
+            self._animating = False
+            self.on_start()
+
+        anim.bind(on_complete=_done)
+        anim.start(self._rect)
+
+
 class PartPill(ButtonBehavior, BoxLayout):
-    """A compact, color-accented pill for selecting a part."""
+    """A compact, color-accented pill for selecting a single part to practice."""
 
     def __init__(self, part_id, on_select, **kwargs):
         super().__init__(**kwargs)
@@ -55,54 +142,37 @@ class PartPill(ButtonBehavior, BoxLayout):
         self._press_inset = dp(4)
 
         part = PARTS[part_id]
-        radius = dp(20)  # large radius = pill shape
+        radius = dp(20)
 
         with self.canvas.before:
-            # Card surface
             Color(*SURFACE)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
-            # Color accent bar across the top of the pill
             self._accent_color = Color(*part["color"])
             self._accent = RoundedRectangle(
-                pos=self.pos, size=(self.width, dp(4)),
-                radius=[dp(2)],
+                pos=self.pos, size=(self.width, dp(4)), radius=[dp(2)],
             )
         self.bind(pos=self._sync, size=self._sync)
 
-        # "PART 1" label in the part color
         self.add_widget(Label(
-            text=part["label"],
-            font_size=FONT_LABEL,
-            color=part["color"],
-            bold=True,
-            halign="center", valign="middle",
-            size_hint_y=None, height=dp(18),
+            text=part["label"], font_size=FONT_LABEL, color=part["color"], bold=True,
+            halign="center", valign="middle", size_hint_y=None, height=dp(18),
         ))
-        # Short name (e.g. "Introduction")
         name_lbl = Label(
-            text=part["name"],
-            font_size="13sp",
-            color=TEXT,
-            bold=True,
-            halign="center", valign="middle",
-            size_hint_y=None, height=dp(20),
+            text=part["name"], font_size="13sp", color=TEXT, bold=True,
+            halign="center", valign="middle", size_hint_y=None, height=dp(20),
         )
         name_lbl.bind(width=lambda i, w: setattr(i, "text_size", (w, None)))
         self.add_widget(name_lbl)
-        # Question count
         self.add_widget(Label(
             text="{} Qs".format(total_questions(part_id)),
-            font_size=FONT_LABEL,
-            color=MUTED,
-            halign="center", valign="middle",
-            size_hint_y=None, height=dp(16),
+            font_size=FONT_LABEL, color=MUTED,
+            halign="center", valign="middle", size_hint_y=None, height=dp(16),
         ))
 
     def _sync(self, *_):
         if not getattr(self, "_animating", False):
             self._rect.pos = self.pos
             self._rect.size = self.size
-        # Accent bar always sits at the top edge, full width
         self._accent.pos = (self.x, self.top - dp(4))
         self._accent.size = (self.width, dp(4))
 
@@ -113,9 +183,8 @@ class PartPill(ButtonBehavior, BoxLayout):
         target_pos = (self.x + inset, self.y + inset)
         target_size = (self.width - 2 * inset, self.height - 2 * inset)
         Animation.cancel_all(self._rect)
-        anim = Animation(pos=target_pos, size=target_size,
-                         duration=0.09, transition="out_quad")
-        anim.start(self._rect)
+        Animation(pos=target_pos, size=target_size,
+                  duration=0.09, transition="out_quad").start(self._rect)
 
     def on_release(self):
         Animation.cancel_all(self._rect)
@@ -131,11 +200,17 @@ class PartPill(ButtonBehavior, BoxLayout):
 
 
 class HomeScreen(Screen):
-    def __init__(self, on_part_selected, **kwargs):
+    def __init__(self, on_part_selected, on_full_test=None, **kwargs):
         super().__init__(**kwargs)
         self.on_part_selected = on_part_selected
+        self.on_full_test = on_full_test or self._full_test_placeholder
         self._pills = []
+        self._full_card = None
+        self._cap = None
         self._build_ui()
+
+    def _full_test_placeholder(self):
+        print("Full Test tapped — flow controller not wired yet (Stage 2).")
 
     def _build_ui(self):
         scroll = ScrollView(do_scroll_x=False)
@@ -143,12 +218,21 @@ class HomeScreen(Screen):
                          spacing=dp(16), size_hint_y=None)
         root.bind(minimum_height=root.setter("height"))
 
-        hero = RoundedCard(bg_color=SURFACE2, orientation="vertical",
-                           padding=[dp(20), dp(20)], spacing=dp(6),
+        # Hero: text on the left, rocking graduation cap image on the right
+        hero = RoundedCard(bg_color=SURFACE2, orientation="horizontal",
+                           padding=[dp(20), dp(20)], spacing=dp(8),
                            size_hint_y=None, height=dp(170))
-        hero.add_widget(make_label("AI COACH", FONT_LABEL, LIME, bold=True, height=20))
-        hero.add_widget(make_label("Master Your Speaking Test", "22sp", TEXT, bold=True, height=60))
-        hero.add_widget(make_label("Record answers - Get AI band scores", FONT_BODY, MUTED, height=24))
+
+        hero_text = BoxLayout(orientation="vertical", spacing=dp(6))
+        hero_text.add_widget(make_label("AI COACH", FONT_LABEL, LIME, bold=True, height=20))
+        hero_text.add_widget(make_label("Master Your Speaking Test", "22sp", TEXT, bold=True, height=60))
+        hero_text.add_widget(make_label("Record answers - Get AI band scores", FONT_BODY, MUTED, height=24))
+        hero.add_widget(hero_text)
+
+        self._cap = RockingImage(CAP_IMAGE, max_angle=14,
+                                 size_hint_x=None, width=dp(78))
+        hero.add_widget(self._cap)
+
         root.add_widget(hero)
 
         stats = BoxLayout(orientation="horizontal", spacing=dp(10),
@@ -160,9 +244,13 @@ class HomeScreen(Screen):
             stats.add_widget(box)
         root.add_widget(stats)
 
-        root.add_widget(make_label("SELECT A PART", FONT_LABEL, MUTED, bold=True, height=20))
+        # --- FULL TEST (primary action) ---
+        self._full_card = FullTestCard(on_start=lambda: self.on_full_test())
+        root.add_widget(self._full_card)
 
-        # Three compact pills in a row
+        # --- PRACTICE (individual parts) ---
+        root.add_widget(make_label("OR PRACTICE ONE PART", FONT_LABEL, MUTED, bold=True, height=20))
+
         pill_row = BoxLayout(orientation="horizontal", spacing=dp(10),
                              size_hint_y=None, height=dp(78))
         for part_id in (1, 2, 3):
@@ -187,12 +275,15 @@ class HomeScreen(Screen):
         self.add_widget(scroll)
 
     def on_pre_enter(self, *args):
-        # Reset pills to hidden before the entrance animation
         for pill in self._pills:
             pill.opacity = 0
+        if self._full_card is not None:
+            self._full_card.opacity = 0
 
     def on_enter(self, *args):
-        # Stagger each pill fading in, one after another
-        for i, pill in enumerate(self._pills):
+        items = ([self._full_card] if self._full_card else []) + self._pills
+        for i, item in enumerate(items):
             anim = Animation(opacity=1, duration=0.4, transition="out_quad")
-            Clock.schedule_once(lambda dt, p=pill, a=anim: a.start(p), i * 0.1)
+            Clock.schedule_once(lambda dt, w=item, a=anim: a.start(w), i * 0.1)
+        if self._cap is not None:
+            self._cap.start_rocking()
