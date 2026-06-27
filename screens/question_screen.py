@@ -2,6 +2,7 @@
 
 Shows a question from the bank, runs a countdown timer, and
 records the user's answer to a .wav file in recordings/.
+Includes a live voice-reactive ripple visualizer around the REC button.
 """
 
 from datetime import datetime
@@ -15,10 +16,13 @@ from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.behaviors import ButtonBehavior
+from kivy.uix.widget import Widget
 from kivy.uix.screenmanager import Screen
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, RoundedRectangle, Line, Ellipse
 
 from questions import get_random_question
+from sound import play_tap, play_click
 from theme import (
     BG,
     TEXT,
@@ -37,6 +41,43 @@ PART_1_DURATION = PARTS[1]["duration"]
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "recordings"
 RECORDINGS_DIR.mkdir(exist_ok=True)
 
+# --- Ripple tuning ---
+RIPPLE_FPS = 30                 # how often we update the rings
+RIPPLE_THRESHOLD = 0.02         # min loudness (RMS) before a ring spawns
+RIPPLE_SPAWN_GAP = 0.07         # min seconds between new rings (snappy)
+RIPPLE_LIFETIME = 0.5           # seconds for a ring to expand & fade
+RIPPLE_BASE_RADIUS = dp(55)     # starting radius (just outside the REC button)
+RIPPLE_MAX_GROWTH = dp(90)      # extra radius a loud ring travels
+
+
+class CircleButton(ButtonBehavior, Label):
+    """A circular button: an Ellipse drawn behind centered text."""
+
+    def __init__(self, bg_color=CORAL, **kwargs):
+        super().__init__(**kwargs)
+        self.bg_color = bg_color
+        with self.canvas.before:
+            self._color = Color(*self.bg_color)
+            self._circle = Ellipse(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync_circle, size=self._sync_circle)
+
+    def _sync_circle(self, *_):
+        self._circle.pos = self.pos
+        self._circle.size = self.size
+
+    def set_bg(self, rgba):
+        self._color.rgba = rgba
+
+
+class Ripple:
+    """A single expanding, fading ring."""
+
+    def __init__(self, strength):
+        self.age = 0.0
+        self.growth = RIPPLE_BASE_RADIUS + RIPPLE_MAX_GROWTH * min(strength * 6, 1.0)
+        self.color_instr = None
+        self.line_instr = None
+
 
 class Part1Screen(Screen):
     """Part 1 — short Q&A, timed answer."""
@@ -52,6 +93,12 @@ class Part1Screen(Screen):
         self.stream = None
         self.timer_event = None
         self.seconds_left = PART_1_DURATION
+
+        # Ripple state
+        self._current_level = 0.0
+        self._ripples = []
+        self._ripple_event = None
+        self._time_since_spawn = 0.0
 
         self._build_ui()
         self._load_question()
@@ -137,20 +184,24 @@ class Part1Screen(Screen):
         )
         root.add_widget(self.timer_label)
 
+        # Centered circular REC button via spacers on each side
         btn_row = BoxLayout(size_hint_y=None, height=dp(120))
-        self.record_btn = Button(
+        btn_row.add_widget(Widget())  # left spacer
+        self.record_btn = CircleButton(
             text="REC",
+            bg_color=CORAL,
             size_hint=(None, None),
             size=(dp(100), dp(100)),
-            pos_hint={"center_x": 0.5},
-            background_normal="",
-            background_color=CORAL,
             color=TEXT,
             font_size=dp(20),
             bold=True,
         )
         self.record_btn.bind(on_release=self._toggle_recording)
-        btn_row.add_widget(self.record_btn)
+        # Wrap in an anchor so the fixed-size circle stays vertically centered
+        center_holder = BoxLayout(size_hint=(None, 1), width=dp(100))
+        center_holder.add_widget(self.record_btn)
+        btn_row.add_widget(center_holder)
+        btn_row.add_widget(Widget())  # right spacer
         root.add_widget(btn_row)
 
         self.status_label = Label(
@@ -215,11 +266,16 @@ class Part1Screen(Screen):
         self.record_btn.text = "STOP"
         self.status_label.text = "Recording..."
         self.seconds_left = PART_1_DURATION
+        self._current_level = 0.0
 
         def callback(indata, frames, time_info, status):
             if status:
                 print("Audio status:", status)
             self.audio_frames.append(indata.copy())
+            try:
+                self._current_level = float(np.sqrt(np.mean(indata.astype(np.float64) ** 2)))
+            except Exception:
+                self._current_level = 0.0
 
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -229,6 +285,7 @@ class Part1Screen(Screen):
         self.stream.start()
 
         self.timer_event = Clock.schedule_interval(self._tick, 1.0)
+        self._ripple_event = Clock.schedule_interval(self._update_ripples, 1.0 / RIPPLE_FPS)
 
     def _tick(self, _dt):
         self.seconds_left -= 1
@@ -236,6 +293,55 @@ class Part1Screen(Screen):
         if self.seconds_left <= 0:
             self._stop_recording()
             return False
+
+    def _update_ripples(self, dt):
+        self._time_since_spawn += dt
+        level = self._current_level
+        if (self.is_recording and level > RIPPLE_THRESHOLD
+                and self._time_since_spawn >= RIPPLE_SPAWN_GAP):
+            self._spawn_ripple(level)
+            self._time_since_spawn = 0.0
+
+        cx = self.record_btn.center_x
+        cy = self.record_btn.center_y
+
+        for ripple in self._ripples[:]:
+            ripple.age += dt
+            progress = ripple.age / RIPPLE_LIFETIME
+            if progress >= 1.0:
+                self._remove_ripple(ripple)
+                continue
+            radius = RIPPLE_BASE_RADIUS + ripple.growth * progress
+            alpha = (1.0 - progress) * 0.7
+            if ripple.color_instr is not None:
+                ripple.color_instr.rgba = (CORAL[0], CORAL[1], CORAL[2], alpha)
+            if ripple.line_instr is not None:
+                ripple.line_instr.circle = (cx, cy, radius)
+
+    def _spawn_ripple(self, strength):
+        ripple = Ripple(strength)
+        cx = self.record_btn.center_x
+        cy = self.record_btn.center_y
+        with self.canvas.after:
+            ripple.color_instr = Color(CORAL[0], CORAL[1], CORAL[2], 0.7)
+            ripple.line_instr = Line(circle=(cx, cy, RIPPLE_BASE_RADIUS), width=dp(2))
+        self._ripples.append(ripple)
+
+    def _remove_ripple(self, ripple):
+        try:
+            if ripple.color_instr is not None:
+                self.canvas.after.remove(ripple.color_instr)
+            if ripple.line_instr is not None:
+                self.canvas.after.remove(ripple.line_instr)
+        except Exception:
+            pass
+        if ripple in self._ripples:
+            self._ripples.remove(ripple)
+
+    def _clear_ripples(self):
+        for ripple in self._ripples[:]:
+            self._remove_ripple(ripple)
+        self._ripples = []
 
     def _stop_recording(self):
         if not self.is_recording:
@@ -246,10 +352,18 @@ class Part1Screen(Screen):
             self.timer_event.cancel()
             self.timer_event = None
 
+        if self._ripple_event is not None:
+            self._ripple_event.cancel()
+            self._ripple_event = None
+        self._clear_ripples()
+        self._current_level = 0.0
+
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+
+        play_click()
 
         self.record_btn.text = "REC"
 
@@ -258,7 +372,7 @@ class Part1Screen(Screen):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = RECORDINGS_DIR / ("part1_" + timestamp + ".wav")
             sf.write(str(filename), audio, SAMPLE_RATE)
-            self.status_label.text = "Saved - " + filename.name
+            self.status_label.text = "Answer recorded"
             self.next_btn.disabled = False
             self.next_btn.opacity = 1.0
 
@@ -268,9 +382,11 @@ class Part1Screen(Screen):
             self.status_label.text = "No audio captured"
 
     def _next_question(self, *_):
+        play_tap()
         self._load_question()
 
     def _go_home(self, *_):
+        play_tap()
         if self.is_recording:
             self._stop_recording()
         self.manager.current = "home"

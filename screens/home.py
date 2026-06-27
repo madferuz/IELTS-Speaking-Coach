@@ -7,6 +7,8 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp
+from kivy.animation import Animation
+from kivy.clock import Clock
 
 from theme import (
     SURFACE, SURFACE2, LIME, TEXT, MUTED, DIM,
@@ -14,6 +16,7 @@ from theme import (
     PARTS,
 )
 from questions import total_questions
+from sound import play_tap
 
 
 def make_label(text, font_size, color, bold=False, height=24):
@@ -49,6 +52,8 @@ class PartCard(ButtonBehavior, BoxLayout):
         self.height = dp(130)
         self.part_id = part_id
         self.on_select_callback = on_select
+        # How far the card shrinks inward on press (in dp)
+        self._press_inset = dp(6)
 
         with self.canvas.before:
             Color(*SURFACE)
@@ -63,20 +68,44 @@ class PartCard(ButtonBehavior, BoxLayout):
             "{} questions".format(total_questions(part_id)),
             FONT_LABEL, part["color"], bold=True, height=20,
         ))
-        print("PartCard {} created with {} labels".format(part_id, len(self.children)))
 
     def _sync(self, *_):
-        self._rect.pos = self.pos
-        self._rect.size = self.size
+        # Only re-sync from layout when not mid-press-animation
+        if not getattr(self, "_animating", False):
+            self._rect.pos = self.pos
+            self._rect.size = self.size
+
+    def on_press(self):
+        # Play tap sound + springy shrink-inward on touch down
+        play_tap()
+        self._animating = True
+        inset = self._press_inset
+        target_pos = (self.x + inset, self.y + inset)
+        target_size = (self.width - 2 * inset, self.height - 2 * inset)
+        Animation.cancel_all(self._rect)
+        anim = Animation(pos=target_pos, size=target_size,
+                         duration=0.09, transition="out_quad")
+        anim.start(self._rect)
 
     def on_release(self):
-        self.on_select_callback(self.part_id)
+        # Spring back out with overshoot, then fire the callback
+        Animation.cancel_all(self._rect)
+        anim = Animation(pos=self.pos, size=self.size,
+                         duration=0.32, transition="out_back")
+
+        def _done(*_):
+            self._animating = False
+            self.on_select_callback(self.part_id)
+
+        anim.bind(on_complete=_done)
+        anim.start(self._rect)
 
 
 class HomeScreen(Screen):
     def __init__(self, on_part_selected, **kwargs):
         super().__init__(**kwargs)
         self.on_part_selected = on_part_selected
+        self._cards = []
         self._build_ui()
 
     def _build_ui(self):
@@ -105,7 +134,9 @@ class HomeScreen(Screen):
         root.add_widget(make_label("SELECT A PART", FONT_LABEL, MUTED, bold=True, height=20))
 
         for part_id in (1, 2, 3):
-            root.add_widget(PartCard(part_id=part_id, on_select=self.on_part_selected))
+            card = PartCard(part_id=part_id, on_select=self.on_part_selected)
+            self._cards.append(card)
+            root.add_widget(card)
 
         root.add_widget(make_label("HOW IT WORKS", FONT_LABEL, MUTED, bold=True, height=20))
 
@@ -121,3 +152,14 @@ class HomeScreen(Screen):
 
         scroll.add_widget(root)
         self.add_widget(scroll)
+
+    def on_pre_enter(self, *args):
+        # Reset cards to hidden before the entrance animation
+        for card in self._cards:
+            card.opacity = 0
+
+    def on_enter(self, *args):
+        # Stagger each card fading in, one after another
+        for i, card in enumerate(self._cards):
+            anim = Animation(opacity=1, duration=0.4, transition="out_quad")
+            Clock.schedule_once(lambda dt, c=card, a=anim: a.start(c), i * 0.1)

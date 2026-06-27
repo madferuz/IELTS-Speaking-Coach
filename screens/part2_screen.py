@@ -2,6 +2,8 @@
 
 Shows a cue card, runs a 60s prep phase with a notes area,
 then records up to 2 minutes of the user's long turn.
+Includes the shared circular REC button + voice-reactive ripple
+(active only during the recording phase, never during prep).
 """
 
 from datetime import datetime
@@ -15,12 +17,15 @@ from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.widget import Widget
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.graphics import Color, RoundedRectangle
 
 from questions import get_random_question
+from sound import play_tap, play_click
+from screens.recorder_widgets import CircleButton, RippleController
 from theme import (
     BG,
     SURFACE,
@@ -68,6 +73,7 @@ class Part2Screen(Screen):
         self.seconds_left = 0
 
         self._build_ui()
+        self.ripple = RippleController(self, self.record_btn)
         self._load_question()
 
     # ------------------------------------------------------------
@@ -258,19 +264,24 @@ class Part2Screen(Screen):
         )
         root.add_widget(self.status_label)
 
-        # Action button (changes label based on phase)
-        self.action_btn = Button(
-            text="Start 1-minute prep",
-            size_hint_y=None,
-            height=dp(52),
-            background_normal="",
-            background_color=VIOLET,
+        # Action button (changes label based on phase) — circular REC
+        btn_row = BoxLayout(size_hint_y=None, height=dp(120))
+        btn_row.add_widget(Widget())
+        self.record_btn = CircleButton(
+            text="GO",
+            bg_color=VIOLET,
+            size_hint=(None, None),
+            size=(dp(100), dp(100)),
             color=TEXT,
-            font_size=dp(16),
+            font_size=dp(18),
             bold=True,
         )
-        self.action_btn.bind(on_release=self._on_action)
-        root.add_widget(self.action_btn)
+        self.record_btn.bind(on_release=self._on_action)
+        center_holder = BoxLayout(size_hint=(None, 1), width=dp(100))
+        center_holder.add_widget(self.record_btn)
+        btn_row.add_widget(center_holder)
+        btn_row.add_widget(Widget())
+        root.add_widget(btn_row)
 
         # Next button (hidden until DONE)
         self.next_btn = Button(
@@ -307,8 +318,8 @@ class Part2Screen(Screen):
             self.topic_label.text = ""
             self.cue_points_label.text = ""
             self.tips_label.text = ""
-            self.action_btn.disabled = True
-            self.action_btn.opacity = 0.5
+            self.record_btn.disabled = True
+            self.record_btn.opacity = 0.5
             return
 
         q, idx = result
@@ -331,10 +342,10 @@ class Part2Screen(Screen):
         if phase == PHASE_IDLE:
             self.timer_label.text = format_time(PREP_DURATION)
             self.status_label.text = "Read the cue card carefully"
-            self.action_btn.text = "Start 1-minute prep"
-            self.action_btn.background_color = VIOLET
-            self.action_btn.disabled = False
-            self.action_btn.opacity = 1
+            self.record_btn.text = "PREP"
+            self.record_btn.set_bg(VIOLET)
+            self.record_btn.disabled = False
+            self.record_btn.opacity = 1
             self._collapse_notes()
             self.notes_input.text = ""
             self.next_btn.disabled = True
@@ -344,8 +355,8 @@ class Part2Screen(Screen):
             self.seconds_left = PREP_DURATION
             self.timer_label.text = format_time(PREP_DURATION)
             self.status_label.text = "Preparing - make some notes"
-            self.action_btn.text = "I'm ready - start recording"
-            self.action_btn.background_color = CORAL
+            self.record_btn.text = "REC"
+            self.record_btn.set_bg(CORAL)
             self._expand_notes()
             self.timer_event = Clock.schedule_interval(self._tick_prep, 1.0)
 
@@ -353,18 +364,18 @@ class Part2Screen(Screen):
             self.seconds_left = TALK_DURATION
             self.timer_label.text = format_time(TALK_DURATION)
             self.status_label.text = "Recording - speak now"
-            self.action_btn.text = "Stop recording"
-            self.action_btn.background_color = CORAL
+            self.record_btn.text = "STOP"
+            self.record_btn.set_bg(CORAL)
             # Notes stay visible during recording (read-only)
             self.notes_input.readonly = True
             self._start_audio_stream()
             self.timer_event = Clock.schedule_interval(self._tick_record, 1.0)
 
         elif phase == PHASE_DONE:
-            self.status_label.text = "Saved - tap Next cue card to continue"
-            self.action_btn.disabled = True
-            self.action_btn.opacity = 0.4
-            self.action_btn.text = "Done"
+            self.status_label.text = "Answer recorded"
+            self.record_btn.disabled = True
+            self.record_btn.opacity = 0.4
+            self.record_btn.text = "DONE"
             self.next_btn.disabled = False
             self.next_btn.opacity = 1
             self.notes_input.readonly = True
@@ -386,8 +397,10 @@ class Part2Screen(Screen):
     # ------------------------------------------------------------
     def _on_action(self, *_):
         if self.phase == PHASE_IDLE:
+            play_tap()
             self._set_phase(PHASE_PREP)
         elif self.phase == PHASE_PREP:
+            play_tap()
             self._end_prep_early()
         elif self.phase == PHASE_RECORDING:
             self._stop_recording()
@@ -426,6 +439,10 @@ class Part2Screen(Screen):
             if status:
                 print("Audio status:", status)
             self.audio_frames.append(indata.copy())
+            try:
+                self.ripple.level = float(np.sqrt(np.mean(indata.astype(np.float64) ** 2)))
+            except Exception:
+                self.ripple.level = 0.0
 
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -433,6 +450,8 @@ class Part2Screen(Screen):
             callback=callback,
         )
         self.stream.start()
+        # Ripple fires only during the recording phase
+        self.ripple.start()
 
     def _stop_recording(self):
         if self.phase != PHASE_RECORDING:
@@ -442,10 +461,15 @@ class Part2Screen(Screen):
             self.timer_event.cancel()
             self.timer_event = None
 
+        self.ripple.stop()
+
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+
+        # Mic closed — safe to play the click
+        play_click()
 
         if self.audio_frames:
             audio = np.concatenate(self.audio_frames, axis=0)
@@ -468,13 +492,16 @@ class Part2Screen(Screen):
     # Navigation
     # ------------------------------------------------------------
     def _next_question(self, *_):
+        play_tap()
         self._load_question()
 
     def _go_home(self, *_):
+        play_tap()
         # Clean up before leaving
         if self.timer_event is not None:
             self.timer_event.cancel()
             self.timer_event = None
+        self.ripple.stop()
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()

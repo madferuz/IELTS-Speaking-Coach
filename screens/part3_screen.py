@@ -2,6 +2,8 @@
 
 Discussion phase - one main question plus two follow-ups,
 each with its own 45-second recording.
+Includes the shared circular REC button + voice-reactive ripple,
+reset cleanly between each of the three recordings.
 """
 
 from datetime import datetime
@@ -15,10 +17,13 @@ from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.widget import Widget
 from kivy.uix.screenmanager import Screen
 from kivy.graphics import Color, RoundedRectangle
 
 from questions import get_random_question
+from sound import play_tap, play_click
+from screens.recorder_widgets import CircleButton, RippleController
 from theme import (
     BG,
     SURFACE2,
@@ -61,6 +66,7 @@ class Part3Screen(Screen):
         self.seconds_left = QUESTION_DURATION
 
         self._build_ui()
+        self.ripple = RippleController(self, self.record_btn)
         self._load_question()
 
     # ------------------------------------------------------------
@@ -187,21 +193,23 @@ class Part3Screen(Screen):
         )
         root.add_widget(self.timer_label)
 
-        # Record button
+        # Record button — circular
         btn_row = BoxLayout(size_hint_y=None, height=dp(110))
-        self.record_btn = Button(
+        btn_row.add_widget(Widget())
+        self.record_btn = CircleButton(
             text="REC",
+            bg_color=CORAL,
             size_hint=(None, None),
             size=(dp(100), dp(100)),
-            pos_hint={"center_x": 0.5},
-            background_normal="",
-            background_color=CORAL,
             color=TEXT,
             font_size=dp(20),
             bold=True,
         )
         self.record_btn.bind(on_release=self._toggle_recording)
-        btn_row.add_widget(self.record_btn)
+        center_holder = BoxLayout(size_hint=(None, 1), width=dp(100))
+        center_holder.add_widget(self.record_btn)
+        btn_row.add_widget(center_holder)
+        btn_row.add_widget(Widget())
         root.add_widget(btn_row)
 
         # Status text
@@ -319,6 +327,10 @@ class Part3Screen(Screen):
             if status:
                 print("Audio status:", status)
             self.audio_frames.append(indata.copy())
+            try:
+                self.ripple.level = float(np.sqrt(np.mean(indata.astype(np.float64) ** 2)))
+            except Exception:
+                self.ripple.level = 0.0
 
         self.stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -327,6 +339,7 @@ class Part3Screen(Screen):
         )
         self.stream.start()
         self.timer_event = Clock.schedule_interval(self._tick, 1.0)
+        self.ripple.start()
 
     def _tick(self, _dt):
         self.seconds_left -= 1
@@ -344,10 +357,14 @@ class Part3Screen(Screen):
             self.timer_event.cancel()
             self.timer_event = None
 
+        self.ripple.stop()
+
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
             self.stream = None
+
+        play_click()
 
         self.record_btn.text = "REC"
 
@@ -359,7 +376,7 @@ class Part3Screen(Screen):
                 "part3_" + self.session_timestamp + "_" + label + ".wav"
             )
             sf.write(str(filename), audio, SAMPLE_RATE)
-            self.status_label.text = "Saved - " + filename.name
+            self.status_label.text = "Answer recorded"
             self.continue_btn.disabled = False
             self.continue_btn.opacity = 1.0
         else:
@@ -369,6 +386,7 @@ class Part3Screen(Screen):
     # Continue / navigation between questions
     # ------------------------------------------------------------
     def _on_continue(self, *_):
+        play_tap()
         if self.question_step < 2:
             # Move to next question in this discussion
             self.question_step += 1
@@ -380,11 +398,13 @@ class Part3Screen(Screen):
             self._load_question()
 
     def _go_home(self, *_):
+        play_tap()
         if self.is_recording:
             self._stop_recording()
         if self.timer_event is not None:
             self.timer_event.cancel()
             self.timer_event = None
+        self.ripple.stop()
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
