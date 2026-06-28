@@ -1,4 +1,9 @@
-"""Home screen — landing page with hero, stats, full-test card, and practice pills."""
+"""Home screen — landing page with hero, stats, full-test card, and practice pills.
+
+Depth pass: cards now sit on the dark background with a soft COLORED GLOW behind
+them plus a 1px border, the dark-theme equivalent of elevation. All navigation,
+callbacks, and animations are unchanged from the original.
+"""
 
 import os
 
@@ -8,18 +13,21 @@ from kivy.uix.label import Label
 from kivy.uix.image import Image
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.scrollview import ScrollView
-from kivy.graphics import Color, RoundedRectangle, PushMatrix, PopMatrix, Rotate
+from kivy.graphics import (
+    Color, RoundedRectangle, Line, PushMatrix, PopMatrix, Rotate,
+)
 from kivy.metrics import dp
 from kivy.animation import Animation
 from kivy.clock import Clock
 
 from theme import (
-    SURFACE, SURFACE2, LIME, TEXT, MUTED, DIM, BG,
+    SURFACE, SURFACE2, BORDER, LIME, TEXT, MUTED, DIM, BG,
     FONT_H2, FONT_BODY, FONT_LABEL,
     PARTS,
 )
 from questions import total_questions
 from sound import play_tap
+from depth import draw_glow
 
 
 # Path to the graduation cap image (assets/ next to the project root)
@@ -66,16 +74,33 @@ class RockingImage(Image):
 
 
 class RoundedCard(BoxLayout):
-    def __init__(self, bg_color=SURFACE, radius=12, **kwargs):
+    """A surface card with an optional soft glow halo and a subtle border."""
+
+    def __init__(self, bg_color=SURFACE, radius=12,
+                 glow_color=None, glow_alpha=0.25, border_color=BORDER, **kwargs):
         super().__init__(**kwargs)
+        _radius = dp(radius)
         with self.canvas.before:
+            # glow first (back layer) so the solid fill sits on top of it
+            if glow_color is not None:
+                draw_glow(self, glow_color, spread=dp(14), alpha=glow_alpha)
             Color(*bg_color)
-            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(radius)])
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[_radius])
+            # subtle border for crisp edges on the dark bg
+            self._border_color = Color(*border_color)
+            self._border = Line(
+                rounded_rectangle=(self.x, self.y, self.width, self.height, _radius),
+                width=1.0,
+            )
+        self._radius = _radius
         self.bind(pos=self._sync, size=self._sync)
 
     def _sync(self, *_):
         self._rect.pos = self.pos
         self._rect.size = self.size
+        self._border.rounded_rectangle = (
+            self.x, self.y, self.width, self.height, self._radius,
+        )
 
 
 class FullTestCard(ButtonBehavior, BoxLayout):
@@ -92,6 +117,8 @@ class FullTestCard(ButtonBehavior, BoxLayout):
         self._press_inset = dp(6)
 
         with self.canvas.before:
+            # lime glow makes the primary action visibly "lift" off the page
+            draw_glow(self, LIME, spread=dp(28), alpha=0.62)
             Color(*LIME)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(16)])
         self.bind(pos=self._sync, size=self._sync)
@@ -145,6 +172,8 @@ class PartPill(ButtonBehavior, BoxLayout):
         radius = dp(20)
 
         with self.canvas.before:
+            # each pill glows in its own part color (cyan / violet / amber)
+            draw_glow(self, part["color"], spread=dp(18), alpha=0.38)
             Color(*SURFACE)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[radius])
             self._accent_color = Color(*part["color"])
@@ -221,6 +250,7 @@ class HomeScreen(Screen):
         # Hero: text on the left, rocking graduation cap image on the right
         hero = RoundedCard(bg_color=SURFACE2, orientation="horizontal",
                            padding=[dp(20), dp(20)], spacing=dp(8),
+                           glow_color=LIME, glow_alpha=0.18,
                            size_hint_y=None, height=dp(170))
 
         hero_text = BoxLayout(orientation="vertical", spacing=dp(6))
