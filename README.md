@@ -81,3 +81,13 @@ here on GitHub.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Project structure
+
+- `ielts_speaking.py` — main application logic and practice session flow
+- `main.py` — entry point
+- `questions.py` — question banks for Parts 1, 2, and 3
+- `sound.py` — audio recording and playback
+- `theme.py` — UI theming
+- `depth.py` — supporting logic
+- `assets/`, `screens/`, `sounds/` — static resources
